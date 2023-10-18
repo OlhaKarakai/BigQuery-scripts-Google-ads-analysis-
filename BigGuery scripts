@@ -1,0 +1,102 @@
+Task 1:
+SELECT
+timestamp_micros(event_timestamp) event_time,
+user_pseudo_id, 
+(select value.int_value from GA.event_params where key = 'ga_session_id') session_id,
+event_name, 
+geo.country,
+device.category,
+traffic_source.source,
+traffic_source.medium,
+traffic_source.name campaign_name
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*` GA 
+where _table_suffix between '20210101' and '20211231'
+and 
+event_name in ('session_start','view_item', 'add_to_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase')
+LIMIT 100
+
+
+Task 2.
+with sesions_details as (
+  SELECT 
+      date(timestamp_micros(event_timestamp)) date_event, 
+      event_timestamp,
+      traffic_source.source source_name,
+      traffic_source.medium source_medium,
+      traffic_source.name campaign_name, 
+      event_name,
+      concat (user_pseudo_id,(select value.int_value from e.event_params where key = 'ga_session_id')) user_session_id
+ FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*` e
+  limit 10000
+),
+
+
+sessions_counts as (
+  select
+      date_event,       
+      source_name,
+      source_medium,
+      campaign_name,
+      user_session_id,
+      count (case when event_name ='session_start' then event_timestamp end) as session_start_count,
+      count (case when event_name ='add_to_cart' then event_timestamp end) as cart_count,
+      count (case when event_name = 'begin_checkout' then event_timestamp end) as checkout_count, 
+      count (case when event_name = 'purchase' then event_timestamp end) as purchase_count     
+ from sesions_details
+ group by 1,2,3,4,5
+ order by 1,5)
+ 
+ select 
+      date_event,       
+      source_name,
+      source_medium,
+      campaign_name, 
+      count(user_session_id) user_session_count,
+      case
+        when sum(session_start_count)!=0 then round(sum(cart_count)/sum(session_start_count),2) 
+      end visit_to_cart,
+      case
+        when sum(session_start_count)!=0 then round(sum(checkout_count)/sum(session_start_count),2) 
+      end visit_to_checkout,
+      case
+        when sum(session_start_count)!=0 then round(sum(purchase_count)/sum(session_start_count),2) 
+      end visit_to_purchase
+  from sessions_counts
+  group by 1,2,3,4
+  order by 1,5 desc;
+
+Task 3.
+
+with paths_details as (
+  SELECT  
+    regexp_extract ((select value. string_value from e.event_params where key = 'page_location'), 
+    r'https://[^\/]+/([^&#]*)') path,
+    concat (user_pseudo_id,(select value.int_value from e.event_params where key = 'ga_session_id')) user_session_id,
+    event_name,
+    event_timestamp
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_2020*` e
+LIMIT 100000),
+
+path_counts as(
+  select 
+    path, 
+    user_session_id, 
+    count (case when event_name ='session_start' then event_timestamp end) as session_start_count,
+    count (case when event_name = 'purchase' then event_timestamp end) as purchase_count
+from paths_details
+group by 1,2
+order by 2 desc)
+
+select 
+distinct path, 
+count (user_session_id) as user_session_count,
+sum(purchase_count) purchase,
+coalesce (case 
+  when sum(session_start_count)!=0 then sum(purchase_count)/sum(session_start_count) 
+end,0) conversion_start_to_purchase
+from path_counts
+group by 1
+order by 3 desc
+
+
+
